@@ -26,14 +26,13 @@ In this example the endpoint would be ws://127.0.0.1:9999/
 
 I don't know of any public/open SHiP endpoints.
 
-The aim is to provide a callback function
-* which will be called when a new block is received
+The library is designed to run in a seperate thread, and uses [futures_channel::mpsc::unbounded](https://docs.rs/futures-channel-preview/0.3.0-alpha.19/futures_channel/mpsc/fn.unbounded.html) to communicate requests/responses to the SHiP endpoint itself.
 
+The example program [ship-dumper](/examples/ship-dumper.rs) provides a simple example of how to use this tool.  (feedback welcome)
 
 ## Status
 
  _early_ stages.
-
 
 ## Build notes
 
