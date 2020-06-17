@@ -186,7 +186,7 @@ impl ShipResultsEx {
                 };
                 let block = match br.block {
                     None => None,
-                    Some(t) => Some(ShipResultsEx::convert_block(shipper_abi, &t.as_bytes()).unwrap())
+                    Some(t) => Some(ShipResultsEx::convert_block_v0(shipper_abi, &t.as_bytes()).unwrap())
                 };
 
                 let br_ex = GetBlocksResultV0Ex {
@@ -249,10 +249,11 @@ impl ShipResultsEx {
         }
     }
 
-    fn convert_block(shipper_abi: &ABIEOS, block_hex: &[u8]) -> Result<SignedBlock> {
+    // v0 only has a signed_block_v0 .. v1 contains a variant here
+    fn convert_block_v0(shipper_abi: &ABIEOS, block_hex: &[u8]) -> Result<SignedBlock> {
         let json = shipper_abi.hex_to_json("eosio", "signed_block", block_hex)?;
-        let signed_block: SignedBlock = serde_json::from_str(&json)?;
-        Ok(signed_block)
+        let signed_block: SignedBlockV0 = serde_json::from_str(&json)?;
+        Ok(SignedBlock::signed_block_v0(signed_block))
     }
 
 }

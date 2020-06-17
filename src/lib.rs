@@ -15,7 +15,7 @@ pub mod errors;
 pub mod shipper_types;
 
 use crate::shipper_types::{
-    BlockPosition, GetBlocksRequestV0, GetBlocksResultV0,  GetStatusResponseV0,
+    BlockPosition, GetBlocksRequestV0,
     ShipRequests, ShipResults, ShipResultsEx
 };
 use libabieos_sys::{AbiFiles, ABIEOS};
@@ -59,34 +59,6 @@ fn _get_block_request_v0(
     Ok(trx?)
 }
 
-fn _get_status_response_v0(shipper_abi: &ABIEOS, bin: &[u8]) -> Result<GetStatusResponseV0> {
-    let mut s: String = String::from("");
-    for b in bin {
-        let hex = format!("{:02x}", b);
-        s += hex.as_str();
-    }
-    let json = shipper_abi.hex_to_json("eosio", "result", s.as_bytes())?;
-    let r: ShipResults = serde_json::from_str(&json)?;
-
-    match r {
-        ShipResults::get_status_result_v0(sr) => Ok(sr),
-        _ => Err("Invalid response to status".into()),
-    }
-}
-
-fn _get_block_response_v0(shipper_abi: &ABIEOS, bin: &[u8]) -> Result<GetBlocksResultV0> {
-    let mut s: String = String::from("");
-    for b in bin {
-        let hex = format!("{:02x}", b);
-        s += hex.as_str();
-    }
-    let json = shipper_abi.hex_to_json("eosio", "result", s.as_bytes())?;
-    let sr: ShipResults = serde_json::from_str(&json)?;
-    match sr {
-        ShipResults::get_blocks_result_v0(br) => Ok(br),
-        _ => Err("Invalid response to block response".into()),
-    }
-}
 
 
 pub async fn get_sink_stream(server_url: &str, mut in_tx: UnboundedReceiver<ShipRequests>, mut out_rx: UnboundedSender<ShipResultsEx>) -> Result<()> {
