@@ -156,6 +156,7 @@ pub struct BlockPosition {
 pub enum ShipResults {
     get_status_result_v0(GetStatusResponseV0),
     get_blocks_result_v0(GetBlocksResultV0),
+    get_blocks_result_v1(GetBlocksResultV1)
 }
 
 
@@ -200,6 +201,28 @@ impl ShipResultsEx {
 
                 Ok(ShipResultsEx::BlockResult(br_ex))
             },
+            ShipResults::get_blocks_result_v1(br) => {
+                let traces = match br.traces {
+                    None => vec![],
+                    Some(t) => ShipResultsEx::convert_traces(shipper_abi, &t.as_bytes()).unwrap()
+                };
+                let deltas = match br.deltas {
+                    None => vec![],
+                    Some(t) => ShipResultsEx::convert_deltas(shipper_abi, &t.as_bytes()).unwrap()
+                };
+
+                let br_ex = GetBlocksResultV0Ex {
+                    head: br.head,
+                    last_irreversible: br.last_irreversible,
+                    this_block: br.this_block,
+                    prev_block: br.prev_block,
+                    block: br.block,
+                    traces: traces,
+                    deltas: deltas
+                };
+
+                Ok(ShipResultsEx::BlockResult(br_ex))
+            },
             ShipResults::get_status_result_v0(sr) => {
                 Ok(ShipResultsEx::Status(sr))
             },
@@ -207,15 +230,23 @@ impl ShipResultsEx {
         }
     }
     fn convert_traces(shipper_abi: &ABIEOS, trace_hex: &[u8]) -> Result<Vec<Traces>> {
-        let json = shipper_abi.hex_to_json("eosio", "transaction_trace[]", trace_hex)?;
-        let trace_v: Vec<Traces> = serde_json::from_str(&json)?;
-        Ok(trace_v)
+        if trace_hex.len() == 0 {
+            Ok(vec![])
+        } else {
+            let json = shipper_abi.hex_to_json("eosio", "transaction_trace[]", trace_hex)?;
+            let trace_v: Vec<Traces> = serde_json::from_str(&json)?;
+            Ok(trace_v)
+        }
     }
 
     fn convert_deltas(shipper_abi: &ABIEOS, delta_hex: &[u8]) -> Result<Vec<TableDeltas>> {
-        let json = shipper_abi.hex_to_json("eosio", "table_delta[]", delta_hex)?;
-        let deltas: Vec<TableDeltas> = serde_json::from_str(&json)?;
-        Ok(deltas)
+        if delta_hex.len() == 0 {
+            Ok(vec![])
+        } else {
+            let json = shipper_abi.hex_to_json("eosio", "table_delta[]", delta_hex)?;
+            let deltas: Vec<TableDeltas> = serde_json::from_str(&json)?;
+            Ok(deltas)
+        }
     }
 
     fn convert_block(shipper_abi: &ABIEOS, block_hex: &[u8]) -> Result<SignedBlock> {
@@ -244,6 +275,17 @@ pub struct GetBlocksResultV0 {
     pub this_block: Option<BlockPosition>,
     pub prev_block: Option<BlockPosition>,
     pub block: Option<String>,
+    pub traces: Option<String>,
+    pub deltas: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetBlocksResultV1 {
+    pub head: BlockPosition,
+    pub last_irreversible: BlockPosition,
+    pub this_block: Option<BlockPosition>,
+    pub prev_block: Option<BlockPosition>,
+    pub block: Option<SignedBlock>,
     pub traces: Option<String>,
     pub deltas: Option<String>,
 }
@@ -287,6 +329,7 @@ pub struct TransactionTraceV0 {
 #[derive(Debug, Deserialize)]
 pub enum PartialTransactionVariant {
     partial_transaction_v0(PartialTransactionV0),
+    partial_transaction_v1(PartialTransactionV1),
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,6 +344,19 @@ pub struct PartialTransactionV0 {
     pub transaction_extensions: Vec<Extension>,
     pub signatures: Vec<String>,
     //    pub context_free_data: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PartialTransactionV1 {
+    #[serde(with = "eosio_datetime_format")]
+    pub expiration: DateTime<Utc>,
+    pub ref_block_num: u16,
+    pub ref_block_prefix: u32,
+    pub max_net_usage_words: u32,
+    pub max_cpu_usage_ms: u8,
+    pub delay_sec: u32,
+    pub transaction_extensions: Vec<Extension>,
+    pub prunable_data: Option<PrunableData>,
 }
 
 #[allow(non_camel_case_types)]
@@ -446,19 +502,35 @@ pub struct Transaction {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TransactionReceipt {
+pub struct TransactionReceiptHeader {
     pub status: u8,
     pub cpu_usage_us: u32,
     pub net_usage_words: u32,
-    pub trx: TransactionVariant,
 }
-
+#[derive(Debug, Deserialize)]
+pub struct TransactionReceiptV0 {
+    #[serde(flatten)]
+    pub header: TransactionReceiptHeader,
+    pub trx: TransactionVariantV0
+}
+#[derive(Debug, Deserialize)]
+pub struct TransactionReceiptV1 {
+    #[serde(flatten)]
+    pub header: TransactionReceiptHeader,
+    pub trx: TransactionVariantV1
+}
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
-pub enum TransactionVariant {
+pub enum TransactionVariantV0 {
     transaction_id(TransactionID),
-    packed_transaction(PackedTransaction),
+    packed_transaction_v0(PackedTransactionV0),
+}
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum TransactionVariantV1 {
+    transaction_id(TransactionID),
+    packed_transaction_v1(PackedTransactionV1),
 }
 
 #[derive(Debug, Deserialize)]
@@ -467,7 +539,7 @@ pub struct TransactionID {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PackedTransaction {
+pub struct PackedTransactionV0 {
     pub signatures: Vec<String>,
     pub compression: u8,
     pub packed_context_free_data: String,
@@ -475,7 +547,58 @@ pub struct PackedTransaction {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SignedBlock {
+pub struct PackedTransactionV1 {
+    pub compression: u8,
+    pub prunable_data: PrunableData,
+    pub packed_trx: String,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum PrunableData {
+    prunable_data_full_legacy(PrunableDataFullLegacy),
+    prunable_data_none(PrunableDataNone),
+    prunable_data_partial(PrunableDataPartial),
+    prunable_data_full(PrunableDataFull),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PrunableDataFullLegacy {
+    pub signatures: Vec<String>,
+    pub packed_context_segments: String,
+}
+#[derive(Debug, Deserialize)]
+pub struct PrunableDataFull{
+    pub signatures: Vec<String>,
+    pub context_free_segments: Vec<String>,
+}
+#[derive(Debug, Deserialize)]
+pub struct PrunableDataPartial{
+    pub signatures: Vec<String>,
+    pub context_free_segments: Vec<ContextFreeSegmentType>,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContextFreeSegmentType {
+    signature(String),
+    bytes(String)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PrunableDataNone{
+    pub prunable_digest: String
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum SignedBlock {
+    signed_block_v0(SignedBlockV0),
+    signed_block_v1(SignedBlockV1),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BlockHeader {
     pub timestamp: String,
     pub producer: String,
     pub confirmed: u16,
@@ -485,7 +608,27 @@ pub struct SignedBlock {
     pub schedule_version: u32,
     pub new_producers: Option<ProducerSchedule>,
     pub header_extensions: Vec<Extension>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SignedBlockHeader {
+    #[serde(flatten)]
+    pub header: BlockHeader,
     pub producer_signature: String,
-    pub transactions: Vec<TransactionReceipt>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SignedBlockV0 {
+    #[serde(flatten)]
+    pub signed_header: SignedBlockHeader,
+    pub transactions: Vec<TransactionReceiptV0>,
+    pub block_extensions: Vec<Extension>,
+}
+#[derive(Debug, Deserialize)]
+pub struct SignedBlockV1 {
+    #[serde(flatten)]
+    pub signed_header: SignedBlockHeader,
+    pub prune_state: u8,
+    pub transactions: Vec<TransactionReceiptV1>,
     pub block_extensions: Vec<Extension>,
 }
