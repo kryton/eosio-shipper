@@ -10,53 +10,17 @@ use url::Url;
 //#![recursion_limit = "1024"]
 //
 use errors::{Error, ErrorKind, Result};
-
+#[macro_use]
+extern crate lazy_static;
 pub mod errors;
 pub mod shipper_types;
 
-use crate::shipper_types::{
-    BlockPosition, GetBlocksRequestV0, ShipRequests, ShipResults, ShipResultsEx,
-};
+use crate::shipper_types::{ShipRequests, ShipResultsEx};
 use libabieos_sys::{AbiFiles, ABIEOS};
 
 //use serde_json::Value;
 
 const EOSIO_SYSTEM: &str = "eosio";
-
-fn _get_status_request_v0(shipper_abi: &ABIEOS) -> Result<Vec<u8>> {
-    let json = "[\"get_status_request_v0\",{}]";
-    let trx = shipper_abi.json_to_bin("eosio", "request", &json);
-
-    Ok(trx?)
-}
-
-fn _get_block_request_v0(
-    shipper_abi: &ABIEOS,
-    start_block_num: u32,
-    end_block_num: u32,
-    max_messages_in_flight: u32,
-    have_positions: Vec<BlockPosition>,
-    irreversible_only: bool,
-    fetch_block: bool,
-    fetch_traces: bool,
-    fetch_deltas: bool,
-) -> Result<Vec<u8>> {
-    let gbr = GetBlocksRequestV0 {
-        start_block_num,
-        end_block_num,
-        max_messages_in_flight,
-        have_positions,
-        irreversible_only,
-        fetch_block,
-        fetch_traces,
-        fetch_deltas,
-    };
-    let _json = String::from(serde_json::to_string(&gbr)?);
-    let json: String = String::from("[\"get_blocks_request_v0\",") + &_json + &String::from("]");
-    let trx = shipper_abi.json_to_bin("eosio", "request", &json);
-
-    Ok(trx?)
-}
 
 pub async fn get_sink_stream(
     server_url: &str,

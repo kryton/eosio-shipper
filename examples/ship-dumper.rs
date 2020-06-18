@@ -5,11 +5,14 @@
 // `Cargo.toml`!
 #[macro_use]
 extern crate error_chain;
+#[macro_use]
+extern crate log;
 
 use crate::errors::Result;
 use eosio_shipper::get_sink_stream;
 use eosio_shipper::shipper_types::{
-    GetBlocksRequestV0, GetStatusRequestV0, ShipRequests, ShipResultsEx, SignedBlock,
+    ContractRow, GetBlocksRequestV0, GetStatusRequestV0, ShipRequests, ShipResultsEx, SignedBlock,
+    TableRowEx, TableRowTypes,
 };
 use futures_channel::mpsc::unbounded;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
@@ -47,6 +50,9 @@ fn get_args() -> Result<(String, u32)> {
 #[tokio::main]
 async fn main() {
     env_logger::init();
+    let fetch_block = false;
+    let fetch_traces = false;
+    let fetch_deltas = true;
     match get_args() {
         Err(e) => {
             eprintln!("{:#?}", e);
@@ -85,7 +91,7 @@ async fn main() {
                         ShipResultsEx::Status(st) => {
                             last_block = st.chain_state_end_block;
                             last_fetched = min(current + 1 + 15, last_block);
-                            println!("Chain - {} -> {}", st.chain_id, last_block);
+                            info!("Chain - {} -> {}", st.chain_id, last_block);
                             req_s
                                 .send(ShipRequests::get_blocks_request_v0(GetBlocksRequestV0 {
                                     start_block_num: current + 1,
@@ -93,9 +99,9 @@ async fn main() {
                                     max_messages_in_flight: 15,
                                     have_positions: vec![],
                                     irreversible_only: false,
-                                    fetch_block: true,
-                                    fetch_traces: true,
-                                    fetch_deltas: true,
+                                    fetch_block,
+                                    fetch_traces,
+                                    fetch_deltas,
                                 }))
                                 .await;
                         }
@@ -104,7 +110,7 @@ async fn main() {
                                 current = bp.block_num;
                                 match blo.block {
                                     Some(b) => match b {
-                                        SignedBlock::signed_block_v0(b0) => println!(
+                                        SignedBlock::signed_block_v0(b0) => debug!(
                                             "v0 - {} {} {} {} {} ",
                                             current,
                                             last_block,
@@ -112,7 +118,7 @@ async fn main() {
                                             b0.signed_header.header.timestamp,
                                             b0.signed_header.producer_signature
                                         ),
-                                        SignedBlock::signed_block_v1(b1) => println!(
+                                        SignedBlock::signed_block_v1(b1) => debug!(
                                             "v1 - {} {} {} {} {} ",
                                             current,
                                             last_block,
@@ -121,23 +127,33 @@ async fn main() {
                                             b1.signed_header.producer_signature
                                         ),
                                     },
-                                    None => {
-                                        println!("{} block empty?", current);
-                                        req_s
-                                            .send(ShipRequests::get_status_request_v0(
-                                                GetStatusRequestV0 {},
-                                            ))
-                                            .await;
-                                    }
+                                    None => debug!("empty?"),
                                 }
                                 if !blo.traces.is_empty() {
-                                    println!("\t-{} #Trace", blo.traces.len())
+                                    info!("\t-{} #Trace", blo.traces.len())
                                 }
                                 if !blo.deltas.is_empty() {
-                                    println!("\t-{} #Delta", blo.deltas.len())
+                                    for delta in blo.deltas {
+                                        if delta.name == "contract_row" {
+                                            for row in delta.rows {
+                                                match row.data {
+                                                    TableRowTypes::contract_row(cr) => match cr {
+                                                        ContractRow::contract_row_v0(cr0) => {
+                                                            println!(
+                                                                "Present:{} {:?}",
+                                                                row.present, cr0
+                                                            )
+                                                        }
+                                                        _ => {}
+                                                    },
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 if (current + 1) >= last_block {
-                                    println!("{} reached end {}", current, last_block);
+                                    debug!("{} reached end {}", current, last_block);
                                     req_s
                                         .send(ShipRequests::get_status_request_v0(
                                             GetStatusRequestV0 {},
@@ -146,6 +162,7 @@ async fn main() {
                                 } else {
                                     if (current + 1) >= last_fetched {
                                         last_fetched = min(current + 1 + 15, last_block);
+                                        debug!("GBR-{}->{} {}", current, last_fetched, last_block);
                                         req_s
                                             .send(ShipRequests::get_blocks_request_v0(
                                                 GetBlocksRequestV0 {
@@ -154,9 +171,9 @@ async fn main() {
                                                     max_messages_in_flight: 15,
                                                     have_positions: vec![],
                                                     irreversible_only: false,
-                                                    fetch_block: true,
-                                                    fetch_traces: false,
-                                                    fetch_deltas: false,
+                                                    fetch_block,
+                                                    fetch_traces,
+                                                    fetch_deltas,
                                                 },
                                             ))
                                             .await;
@@ -164,7 +181,7 @@ async fn main() {
                                 }
                             }
                             None => {
-                                println!("{} {} empty", current, last_block);
+                                error!("{} {} empty", current, last_block);
                                 req_s
                                     .send(ShipRequests::get_status_request_v0(
                                         GetStatusRequestV0 {},

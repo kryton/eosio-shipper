@@ -1,4 +1,6 @@
 //use serde::de::{SeqAccess, Visitor};
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 // source from work done by @lucas3fonseca and @leordev
 // plan is to move to their work once it is public
@@ -6,6 +8,32 @@ use crate::errors::Result;
 use chrono::{DateTime, Utc};
 use libabieos_sys::ABIEOS;
 use std::fmt;
+
+lazy_static! {
+    static ref ROWTYPES: HashSet<String> = vec![
+        String::from("account"),
+        String::from("account_metadata"),
+        String::from("code"),
+        String::from("contract_table"),
+        String::from("contract_row"),
+        String::from("contract_index64"),
+        String::from("contract_index128"),
+        String::from("contract_index256"),
+        String::from("contract_index_double"),
+        String::from("contract_index_long_double"),
+        // key_value
+        // global_property
+        // generated_transaction
+        // protocol_state
+        // permission
+        // permission_link
+        String::from("resource_limits"),
+        String::from("resource_usage"),
+        String::from("resource_limits_state"),
+        String::from("resource_limits_config"),
+
+    ] .into_iter().collect();
+}
 
 pub(crate) mod eosio_datetime_format {
     use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
@@ -59,6 +87,7 @@ pub(crate) mod eosio_datetime_format {
         }
     }
 }
+
 //#[derive( Deserialize)]
 pub struct Checksum256 {
     pub value: [u8; 32],
@@ -86,6 +115,7 @@ impl fmt::Debug for Checksum256 {
         write!(f, "{}", self.to_string())
     }
 }
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ShipRequests {
@@ -132,6 +162,7 @@ impl GetBlocksRequestV0 {
         Ok(trx?)
     }
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GetBlocksACKRequestV0 {
     pub num_messages: u32,
@@ -166,6 +197,7 @@ pub enum ShipResultsEx {
     Status(GetStatusResponseV0),
     BlockResult(GetBlocksResultV0Ex),
 }
+
 impl ShipResultsEx {
     pub fn from_bin(shipper_abi: &ABIEOS, bin: &[u8]) -> Result<ShipResultsEx> {
         let mut s: String = String::from("");
@@ -240,13 +272,42 @@ impl ShipResultsEx {
         }
     }
 
-    fn convert_deltas(shipper_abi: &ABIEOS, delta_hex: &[u8]) -> Result<Vec<TableDeltas>> {
+    fn convert_deltas(shipper_abi: &ABIEOS, delta_hex: &[u8]) -> Result<Vec<TableDeltaEx>> {
         if delta_hex.len() == 0 {
             Ok(vec![])
         } else {
             let json = shipper_abi.hex_to_json("eosio", "table_delta[]", delta_hex)?;
             let deltas: Vec<TableDeltas> = serde_json::from_str(&json)?;
-            Ok(deltas)
+            let mut delta_ex: Vec<TableDeltaEx> = Vec::with_capacity(deltas.len());
+            for delta in deltas {
+                match delta {
+                    TableDeltas::table_delta_v0(td0) => {
+                        let name = td0.name;
+                        let mut row_ex: Vec<TableRowEx> = Vec::with_capacity(td0.rows.len());
+                        for row in td0.rows {
+                            if ROWTYPES.contains(&name) {
+                                let _json =
+                                    shipper_abi.hex_to_json("eosio", &name, row.data.as_bytes())?;
+                                let json = format!("{{\"{}\":{}}}", &name, _json);
+                                let r: TableRowTypes = serde_json::from_str(&json)?;
+                                row_ex.push(TableRowEx {
+                                    present: row.present,
+                                    data: r,
+                                });
+                            //  println!("{:?}", row_ex);
+                            } else {
+                                row_ex.push(TableRowEx {
+                                    present: row.present,
+                                    data: TableRowTypes::Other(row.data),
+                                });
+                            }
+                        }
+                        let td_ex = TableDeltaEx { name, rows: row_ex };
+                        delta_ex.push(td_ex);
+                    }
+                }
+            }
+            Ok(delta_ex)
         }
     }
 
@@ -299,7 +360,7 @@ pub struct GetBlocksResultV0Ex {
     pub prev_block: Option<BlockPosition>,
     pub block: Option<SignedBlock>,
     pub traces: Vec<Traces>,
-    pub deltas: Vec<TableDeltas>,
+    pub deltas: Vec<TableDeltaEx>,
 }
 
 #[allow(non_camel_case_types)]
@@ -466,11 +527,6 @@ pub enum TableDeltas {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TableDeltaV {
-    pub deltas: Vec<TableDeltas>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ProducerKey {
     pub name: String,
     pub public_key: String,
@@ -507,12 +563,14 @@ pub struct TransactionReceiptHeader {
     pub cpu_usage_us: u32,
     pub net_usage_words: u32,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct TransactionReceiptV0 {
     #[serde(flatten)]
     pub header: TransactionReceiptHeader,
     pub trx: TransactionVariantV0,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct TransactionReceiptV1 {
     #[serde(flatten)]
@@ -526,6 +584,7 @@ pub enum TransactionVariantV0 {
     transaction_id(TransactionID),
     packed_transaction_v0(PackedTransactionV0),
 }
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
 pub enum TransactionVariantV1 {
@@ -567,11 +626,13 @@ pub struct PrunableDataFullLegacy {
     pub signatures: Vec<String>,
     pub packed_context_segments: String,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct PrunableDataFull {
     pub signatures: Vec<String>,
     pub context_free_segments: Vec<String>,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct PrunableDataPartial {
     pub signatures: Vec<String>,
@@ -624,6 +685,7 @@ pub struct SignedBlockV0 {
     pub transactions: Vec<TransactionReceiptV0>,
     pub block_extensions: Vec<Extension>,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct SignedBlockV1 {
     #[serde(flatten)]
@@ -631,4 +693,289 @@ pub struct SignedBlockV1 {
     pub prune_state: u8,
     pub transactions: Vec<TransactionReceiptV1>,
     pub block_extensions: Vec<Extension>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TableDeltaEx {
+    pub name: String,
+    pub rows: Vec<TableRowEx>,
+}
+#[derive(Debug, Deserialize)]
+pub struct TableRowEx {
+    pub present: bool,
+    pub data: TableRowTypes,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum TableRowTypes {
+    account(Account),
+    account_metadata(AccountMetadata),
+    code(Code),
+    contract_table(ContractTable),
+    contract_row(ContractRow),
+    contract_index64(ContractIndex64),
+    contract_index128(ContractIndex128),
+    contract_index256(ContractIndex256),
+    contract_index_double(ContractIndexDouble),
+    // TODO float 128 it accepts the string.. but no idea next step
+    contract_index_long_double(ContractIndexLongDouble),
+
+    resource_limits(ResourceLimits),
+    resource_usage(ResourceUsage),
+    resource_limits_state(ResourceLimitsState),
+    resource_limits_config(ResourceLimitsConfig),
+
+    Other(String),
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContractTable {
+    contract_table_v0(ContractTableV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContractTableV0 {
+    pub code: String,
+    pub scope: String,
+    pub table: String,
+    pub payer: String,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContractRow {
+    contract_row_v0(ContractRowV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContractRowV0 {
+    pub code: String,
+    pub scope: String,
+    pub table: String,
+    pub primary_key: String,
+    pub payer: String,
+    pub value: String,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContractIndex64 {
+    contract_index64_v0(ContractIndex64V0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContractIndex64V0 {
+    pub code: String,
+    pub scope: String,
+    pub table: String,
+    pub primary_key: String,
+    pub payer: String,
+    pub secondary_key: String,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContractIndex128 {
+    contract_index128_v0(ContractIndex128V0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContractIndex128V0 {
+    pub code: String,
+    pub scope: String,
+    pub table: String,
+    pub primary_key: u64,
+    pub payer: String,
+    pub secondary_key: u128,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContractIndex256 {
+    contract_index256_v0(ContractIndex256V0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContractIndex256V0 {
+    pub code: String,
+    pub scope: String,
+    pub table: String,
+    pub primary_key: u64,
+    pub payer: String,
+    pub secondary_key: String,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContractIndexDouble {
+    contract_index_double_v0(ContractIndexDoubleV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContractIndexDoubleV0 {
+    pub code: String,
+    pub scope: String,
+    pub table: String,
+    pub primary_key: u64,
+    pub payer: String,
+    pub secondary_key: f64,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ContractIndexLongDouble {
+    contract_index_long_double_v0(ContractIndexLongDoubleV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContractIndexLongDoubleV0 {
+    pub code: String,
+    pub scope: String,
+    pub table: String,
+    pub primary_key: u64,
+    pub payer: String,
+    // TODO: float 128
+    //  pub secondary_key: f128,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum Code {
+    code_v0(CodeV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodeV0 {
+    pub vm_type: u8,
+    pub vm_version: u8,
+    pub code_hash: String,
+    pub code: String,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum AccountMetadata {
+    account_metadata_v0(AccountMetadataV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodeID {
+    pub vm_type: u8,
+    pub vm_version: u8,
+    pub code_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountMetadataV0 {
+    pub name: String,
+    pub privileged: bool,
+    #[serde(with = "eosio_datetime_format")]
+    pub last_code_update: DateTime<Utc>,
+    pub code: Option<CodeID>,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum Account {
+    account_v0(AccountV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountV0 {
+    pub name: String,
+    #[serde(with = "eosio_datetime_format")]
+    pub creation_date: DateTime<Utc>,
+    pub abi: String,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ResourceUsage {
+    resource_usage_v0(ResourceUsageV0),
+}
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum UsageAccumulator {
+    usage_accumulator_v0(UsageAccumulatorV0),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UsageAccumulatorV0 {
+    pub last_ordinal: u32,
+    pub value_ex: String, // u64
+    pub consumed: String, // u64
+}
+#[derive(Debug, Deserialize)]
+pub struct ResourceUsageV0 {
+    pub owner: String,
+    pub net_usage: UsageAccumulator,
+    pub cpu_usage: UsageAccumulator,
+    pub ram_usage: String, //u64
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ResourceLimits {
+    resource_limits_v0(ResourceLimitsV0),
+}
+#[derive(Debug, Deserialize)]
+pub struct ResourceLimitsV0 {
+    pub owner: String,
+    pub net_weight: String, //u64
+    pub cpu_weight: String, //u64
+    pub ram_bytes: String,  //u64
+}
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ResourceLimitsState {
+    resource_limits_state_v0(ResourceLimitsStateV0),
+}
+#[derive(Debug, Deserialize)]
+pub struct ResourceLimitsStateV0 {
+    pub average_block_net_usage: UsageAccumulator,
+    pub average_block_cpu_usage: UsageAccumulator, //u64
+    pub total_net_weight: String,                  //u64
+    pub total_cpu_weight: String,                  //u64
+    pub total_ram_bytes: String,                   //u64
+    pub virtual_net_limit: String,                 //u64
+    pub virtual_cpu_limit: String,                 //u64
+}
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ResourceLimitsConfig {
+    resource_limits_config_v0(ResourceLimitsConfigV0),
+}
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ElasticLimitParameters {
+    elastic_limit_parameters_v0(ElasticLimitParametersV0),
+}
+#[derive(Debug, Deserialize)]
+pub struct ElasticLimitParametersV0 {
+    pub target: String,      //u64
+    pub max: String,         //u64
+    pub periods: u32,        //u64
+    pub max_multiplier: u32, //u64
+    pub contract_rate: ResourceLimitsRatio,
+    pub expand_rate: ResourceLimitsRatio,
+}
+#[allow(non_camel_case_types)]
+#[derive(Debug, Deserialize)]
+pub enum ResourceLimitsRatio {
+    resource_limits_ratio_v0(ResourceLimitsRatioV0),
+}
+#[derive(Debug, Deserialize)]
+pub struct ResourceLimitsRatioV0 {
+    pub numerator: String,   //u64
+    pub denominator: String, //u64
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResourceLimitsConfigV0 {
+    pub cpu_limit_parameters: ElasticLimitParameters,
+    pub net_limit_parameters: ElasticLimitParameters,
+    pub account_cpu_usage_average_window: u32,
+    pub account_net_usage_average_window: u32,
 }
