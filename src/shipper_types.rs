@@ -1,11 +1,11 @@
 //use serde::de::{SeqAccess, Visitor};
-use serde::{Deserialize,  Serialize};
+use serde::{Deserialize, Serialize};
 // source from work done by @lucas3fonseca and @leordev
 // plan is to move to their work once it is public
-use libabieos_sys::{ ABIEOS};
-use std::fmt;
-use crate::errors::{ Result};
+use crate::errors::Result;
 use chrono::{DateTime, Utc};
+use libabieos_sys::ABIEOS;
+use std::fmt;
 
 pub(crate) mod eosio_datetime_format {
     use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
@@ -22,8 +22,8 @@ pub(crate) mod eosio_datetime_format {
     // although it may also be generic over the input types T.
     #[allow(dead_code)]
     pub fn serialize<S>(date: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
+    where
+        S: Serializer,
     {
         let s = format!("{}", date.format(FORMAT));
         serializer.serialize_str(&s)
@@ -37,8 +37,8 @@ pub(crate) mod eosio_datetime_format {
     //
     // although it may also be generic over the output types T.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
-        where
-            D: Deserializer<'de>,
+    where
+        D: Deserializer<'de>,
     {
         let s: String = String::deserialize(deserializer)?;
         let len = s.len();
@@ -126,7 +126,8 @@ pub struct GetBlocksRequestV0 {
 impl GetBlocksRequestV0 {
     pub fn to_bin(&self, shipper_abi: &ABIEOS) -> Result<Vec<u8>> {
         let _json = String::from(serde_json::to_string(&self)?);
-        let json: String = String::from("[\"get_blocks_request_v0\",") + &_json + &String::from("]");
+        let json: String =
+            String::from("[\"get_blocks_request_v0\",") + &_json + &String::from("]");
         let trx = shipper_abi.json_to_bin("eosio", "request", &json);
         Ok(trx?)
     }
@@ -139,7 +140,8 @@ pub struct GetBlocksACKRequestV0 {
 impl GetBlocksACKRequestV0 {
     pub fn to_bin(&self, shipper_abi: &ABIEOS) -> Result<Vec<u8>> {
         let _json = String::from(serde_json::to_string(&self)?);
-        let json: String = String::from("[\"get_blocks_ack_request_v0\",") + &_json + &String::from("]");
+        let json: String =
+            String::from("[\"get_blocks_ack_request_v0\",") + &_json + &String::from("]");
         let trx = shipper_abi.json_to_bin("eosio", "request", &json);
         Ok(trx?)
     }
@@ -156,9 +158,8 @@ pub struct BlockPosition {
 pub enum ShipResults {
     get_status_result_v0(GetStatusResponseV0),
     get_blocks_result_v0(GetBlocksResultV0),
-    get_blocks_result_v1(GetBlocksResultV1)
+    get_blocks_result_v1(GetBlocksResultV1),
 }
-
 
 #[derive(Debug, Deserialize)]
 pub enum ShipResultsEx {
@@ -166,7 +167,7 @@ pub enum ShipResultsEx {
     BlockResult(GetBlocksResultV0Ex),
 }
 impl ShipResultsEx {
-    pub fn from_bin(shipper_abi: & ABIEOS, bin: & [u8]) -> Result<ShipResultsEx> {
+    pub fn from_bin(shipper_abi: &ABIEOS, bin: &[u8]) -> Result<ShipResultsEx> {
         let mut s: String = String::from("");
         for b in bin {
             let hex = format!("{:02x}", b);
@@ -178,15 +179,17 @@ impl ShipResultsEx {
             ShipResults::get_blocks_result_v0(br) => {
                 let traces = match br.traces {
                     None => vec![],
-                    Some(t) => ShipResultsEx::convert_traces(shipper_abi, &t.as_bytes()).unwrap()
+                    Some(t) => ShipResultsEx::convert_traces(shipper_abi, &t.as_bytes()).unwrap(),
                 };
                 let deltas = match br.deltas {
                     None => vec![],
-                    Some(t) => ShipResultsEx::convert_deltas(shipper_abi, &t.as_bytes()).unwrap()
+                    Some(t) => ShipResultsEx::convert_deltas(shipper_abi, &t.as_bytes()).unwrap(),
                 };
                 let block = match br.block {
                     None => None,
-                    Some(t) => Some(ShipResultsEx::convert_block_v0(shipper_abi, &t.as_bytes()).unwrap())
+                    Some(t) => {
+                        Some(ShipResultsEx::convert_block_v0(shipper_abi, &t.as_bytes()).unwrap())
+                    }
                 };
 
                 let br_ex = GetBlocksResultV0Ex {
@@ -196,19 +199,19 @@ impl ShipResultsEx {
                     prev_block: br.prev_block,
                     block: block,
                     traces: traces,
-                    deltas: deltas
+                    deltas: deltas,
                 };
 
                 Ok(ShipResultsEx::BlockResult(br_ex))
-            },
+            }
             ShipResults::get_blocks_result_v1(br) => {
                 let traces = match br.traces {
                     None => vec![],
-                    Some(t) => ShipResultsEx::convert_traces(shipper_abi, &t.as_bytes()).unwrap()
+                    Some(t) => ShipResultsEx::convert_traces(shipper_abi, &t.as_bytes()).unwrap(),
                 };
                 let deltas = match br.deltas {
                     None => vec![],
-                    Some(t) => ShipResultsEx::convert_deltas(shipper_abi, &t.as_bytes()).unwrap()
+                    Some(t) => ShipResultsEx::convert_deltas(shipper_abi, &t.as_bytes()).unwrap(),
                 };
 
                 let br_ex = GetBlocksResultV0Ex {
@@ -218,14 +221,12 @@ impl ShipResultsEx {
                     prev_block: br.prev_block,
                     block: br.block,
                     traces: traces,
-                    deltas: deltas
+                    deltas: deltas,
                 };
 
                 Ok(ShipResultsEx::BlockResult(br_ex))
-            },
-            ShipResults::get_status_result_v0(sr) => {
-                Ok(ShipResultsEx::Status(sr))
-            },
+            }
+            ShipResults::get_status_result_v0(sr) => Ok(ShipResultsEx::Status(sr)),
             //_ => Err("Invalid response to block response".into()),
         }
     }
@@ -255,7 +256,6 @@ impl ShipResultsEx {
         let signed_block: SignedBlockV0 = serde_json::from_str(&json)?;
         Ok(SignedBlock::signed_block_v0(signed_block))
     }
-
 }
 
 #[derive(Debug, Deserialize)]
@@ -307,7 +307,6 @@ pub struct GetBlocksResultV0Ex {
 pub enum Traces {
     transaction_trace_v0(TransactionTraceV0),
 }
-
 
 #[derive(Debug, Deserialize)]
 pub struct TransactionTraceV0 {
@@ -512,13 +511,13 @@ pub struct TransactionReceiptHeader {
 pub struct TransactionReceiptV0 {
     #[serde(flatten)]
     pub header: TransactionReceiptHeader,
-    pub trx: TransactionVariantV0
+    pub trx: TransactionVariantV0,
 }
 #[derive(Debug, Deserialize)]
 pub struct TransactionReceiptV1 {
     #[serde(flatten)]
     pub header: TransactionReceiptHeader,
-    pub trx: TransactionVariantV1
+    pub trx: TransactionVariantV1,
 }
 
 #[allow(non_camel_case_types)]
@@ -569,12 +568,12 @@ pub struct PrunableDataFullLegacy {
     pub packed_context_segments: String,
 }
 #[derive(Debug, Deserialize)]
-pub struct PrunableDataFull{
+pub struct PrunableDataFull {
     pub signatures: Vec<String>,
     pub context_free_segments: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
-pub struct PrunableDataPartial{
+pub struct PrunableDataPartial {
     pub signatures: Vec<String>,
     pub context_free_segments: Vec<ContextFreeSegmentType>,
 }
@@ -583,12 +582,12 @@ pub struct PrunableDataPartial{
 #[derive(Debug, Deserialize)]
 pub enum ContextFreeSegmentType {
     signature(String),
-    bytes(String)
+    bytes(String),
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PrunableDataNone{
-    pub prunable_digest: String
+pub struct PrunableDataNone {
+    pub prunable_digest: String,
 }
 
 #[allow(non_camel_case_types)]
