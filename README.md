@@ -37,3 +37,15 @@ The example program [ship-dumper](/examples/ship-dumper.rs) provides a simple ex
 ## Build notes
 
 * This should work with the current release of EOSIO (2.0.x), although I actually use the _develop_ branch for development. 
+
+# SHiP protocol (rough notes)
+SHiP uses websockets to communicate. 
+* It seems to only process one command at a time. so don't just fire off multiple commands and expect it to work.
+* Upon connection Nodeos sends the ABI file required to parse the messages.
+* Once you have this, you can start sending out commands. As of writing this there are 3
+  * Status - gives you the chain ID, and info on how many blocks have been written
+  * Get Blocks - fetch a group of blocks, N at a time (window parameter). you have the option of fetching blocks, traces, and table deltas
+  * Ack Blocks - Nodeos will only send N blocks.. you need to send a ACK to keep progressing through your fetch
+* The response you get back is slightly different depending on what version you are running against. The demo program just sends multiple Get Blocks until it hits the end, and then gets a new status to see where the end is.. 
+
+if you request blocks past the end, it will return 'None'.. 
