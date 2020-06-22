@@ -10,14 +10,14 @@ extern crate log;
 
 use crate::errors::Result;
 use eosio_shipper::get_sink_stream;
-use eosio_shipper::shipper_types::{
-    ContractRow, GetBlocksRequestV0, GetStatusRequestV0, ShipRequests, ShipResultsEx, SignedBlock,
-    TableRowEx, TableRowTypes,
-};
+use eosio_shipper::shipper_types::{ContractRow, GetBlocksRequestV0, GetStatusRequestV0, ShipRequests, ShipResultsEx, SignedBlock, TableRowEx, TableRowTypes, ContractTable, ContractIndex64, ContractIndex128, ContractIndex256, ContractIndexDouble, ContractIndexLongDouble};
 use futures_channel::mpsc::unbounded;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use std::cmp::min;
 use std::env;
+use std::fs::File;
+use std::io::Write;
+
 
 mod errors {
     error_chain! {
@@ -65,6 +65,7 @@ async fn main() {
                 get_sink_stream(&host, req_r, res_s).await;
             };
             let dumper = async {
+                let mut delta_file = File::create("deltas.txt").unwrap();
                 req_s
                     .send(ShipRequests::get_status_request_v0(GetStatusRequestV0 {}))
                     .await;
@@ -90,13 +91,13 @@ async fn main() {
                     match sr {
                         ShipResultsEx::Status(st) => {
                             last_block = st.chain_state_end_block;
-                            last_fetched = min(current + 1 + 15, last_block);
-                            info!("Chain - {} -> {}", st.chain_id, last_block);
+                            last_fetched = min(current + 1 + 150, last_block);
+                            info!("Chain - {} -> {}", st.chain_id.unwrap_or(String::from("?NONE?")), last_block);
                             req_s
                                 .send(ShipRequests::get_blocks_request_v0(GetBlocksRequestV0 {
                                     start_block_num: current + 1,
                                     end_block_num: last_fetched,
-                                    max_messages_in_flight: 15,
+                                    max_messages_in_flight: 150,
                                     have_positions: vec![],
                                     irreversible_only: false,
                                     fetch_block,
@@ -139,11 +140,72 @@ async fn main() {
                                                 match row.data {
                                                     TableRowTypes::contract_row(cr) => match cr {
                                                         ContractRow::contract_row_v0(cr0) => {
-                                                            println!(
-                                                                "Present:{} {:?}",
-                                                                row.present, cr0
-                                                            )
+                                                            delta_file.write_all(
+                                                            format!(
+                                                                "{},ROW,{},{},{},{},{},{},{}\n",
+                                                                current, row.present, cr0.code, cr0.payer, cr0.scope, cr0.table, cr0.primary_key, cr0.value
+                                                            ).as_bytes()).unwrap()
                                                         }
+                                                        _ => {}
+                                                    },
+                                                    TableRowTypes::contract_table(ct) => match ct {
+                                                        ContractTable::contract_table_v0(ct0) => {
+                                                            delta_file.write_all(
+                                                                format!(
+                                                                "{},TABLE,{},{},{},{},{}\n",
+                                                                current, row.present, ct0.code, ct0.payer, ct0.scope, ct0.table
+                                                            ).as_bytes()).unwrap()
+                                                        },
+                                                        _ => {}
+                                                    },
+                                                    TableRowTypes::contract_index64(ci) => match ci {
+                                                        ContractIndex64::contract_index64_v0(ci0) => {
+                                                            delta_file.write_all(
+                                                                format!(
+                                                                "{},INDEX64,{},{},{},{},{},{},{}\n",
+                                                                current, row.present, ci0.code, ci0.payer, ci0.scope, ci0.table, ci0.primary_key, ci0.secondary_key
+                                                            ).as_bytes()).unwrap()
+                                                        },
+                                                        _ => {}
+                                                    },
+                                                    TableRowTypes::contract_index128(ci) => match ci {
+                                                        ContractIndex128::contract_index128_v0(ci0) => {
+                                                            delta_file.write_all(
+                                                                format!(
+                                                                "{},INDEX128,{},{},{},{},{},{},{}\n",
+                                                                current, row.present, ci0.code, ci0.payer, ci0.scope, ci0.table, ci0.primary_key, ci0.secondary_key
+                                                            ).as_bytes()).unwrap()
+                                                        },
+                                                        _ => {}
+                                                    },
+                                                    TableRowTypes::contract_index256(ci) => match ci {
+                                                        ContractIndex256::contract_index256_v0(ci0) => {
+                                                            delta_file.write_all(
+                                                                format!(
+                                                                "{},INDEX256,{},{},{},{},{},{},{}\n",
+                                                                current, row.present, ci0.code, ci0.payer, ci0.scope, ci0.table, ci0.primary_key, ci0.secondary_key
+                                                            ).as_bytes()).unwrap()
+                                                        },
+                                                        _ => {}
+                                                    },
+                                                    TableRowTypes::contract_index_double(ci) => match ci {
+                                                        ContractIndexDouble::contract_index_double_v0(ci0) => {
+                                                            delta_file.write_all(
+                                                                format!(
+                                                                "{},INDEXDBL,{},{},{},{},{},{},{}\n",
+                                                                current, row.present, ci0.code, ci0.payer, ci0.scope, ci0.table, ci0.primary_key, ci0.secondary_key
+                                                            ).as_bytes()).unwrap()
+                                                        },
+                                                        _ => {}
+                                                    },
+                                                    TableRowTypes::contract_index_long_double(ci) => match ci {
+                                                        ContractIndexLongDouble::contract_index_long_double_v0(ci0) => {
+                                                            delta_file.write_all(
+                                                                format!(
+                                                                "{},INDEXLONGDBL,{},{},{},{},{},{},{}\n",
+                                                                current, row.present, ci0.code, ci0.payer, ci0.scope, ci0.table, ci0.primary_key, ci0.secondary_key
+                                                            ).as_bytes()).unwrap()
+                                                        },
                                                         _ => {}
                                                     },
                                                     _ => {}
@@ -154,21 +216,23 @@ async fn main() {
                                 }
                                 if (current + 1) >= last_block {
                                     debug!("{} reached end {}", current, last_block);
+
                                     req_s
                                         .send(ShipRequests::get_status_request_v0(
                                             GetStatusRequestV0 {},
                                         ))
                                         .await;
+                                    delta_file.sync_data();
                                 } else {
                                     if (current + 1) >= last_fetched {
-                                        last_fetched = min(current + 1 + 15, last_block);
+                                        last_fetched = min(current + 1 + 150, last_block);
                                         debug!("GBR-{}->{} {}", current, last_fetched, last_block);
                                         req_s
                                             .send(ShipRequests::get_blocks_request_v0(
                                                 GetBlocksRequestV0 {
                                                     start_block_num: current + 1,
                                                     end_block_num: last_fetched,
-                                                    max_messages_in_flight: 15,
+                                                    max_messages_in_flight: 150,
                                                     have_positions: vec![],
                                                     irreversible_only: false,
                                                     fetch_block,
@@ -177,6 +241,7 @@ async fn main() {
                                                 },
                                             ))
                                             .await;
+                                        delta_file.sync_data();
                                     }
                                 }
                             }
@@ -187,6 +252,7 @@ async fn main() {
                                         GetStatusRequestV0 {},
                                     ))
                                     .await;
+                                delta_file.sync_all();
                             }
                         },
                     }

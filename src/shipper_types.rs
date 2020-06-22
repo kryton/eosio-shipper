@@ -286,6 +286,7 @@ impl ShipResultsEx {
                         let mut row_ex: Vec<TableRowEx> = Vec::with_capacity(td0.rows.len());
                         for row in td0.rows {
                             if ROWTYPES.contains(&name) {
+                               // println!("{}",name);
                                 let _json =
                                     shipper_abi.hex_to_json("eosio", &name, row.data.as_bytes())?;
                                 let json = format!("{{\"{}\":{}}}", &name, _json);
@@ -294,7 +295,7 @@ impl ShipResultsEx {
                                     present: row.present,
                                     data: r,
                                 });
-                            //  println!("{:?}", row_ex);
+
                             } else {
                                 row_ex.push(TableRowEx {
                                     present: row.present,
@@ -327,7 +328,7 @@ pub struct GetStatusResponseV0 {
     pub trace_end_block: u32,
     pub chain_state_begin_block: u32,
     pub chain_state_end_block: u32,
-    pub chain_id: String,
+    pub chain_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -786,9 +787,9 @@ pub struct ContractIndex128V0 {
     pub code: String,
     pub scope: String,
     pub table: String,
-    pub primary_key: u64,
+    pub primary_key: String,
     pub payer: String,
-    pub secondary_key: u128,
+    pub secondary_key: String,
 }
 
 #[allow(non_camel_case_types)]
@@ -802,7 +803,7 @@ pub struct ContractIndex256V0 {
     pub code: String,
     pub scope: String,
     pub table: String,
-    pub primary_key: u64,
+    pub primary_key: String,
     pub payer: String,
     pub secondary_key: String,
 }
@@ -818,9 +819,9 @@ pub struct ContractIndexDoubleV0 {
     pub code: String,
     pub scope: String,
     pub table: String,
-    pub primary_key: u64,
+    pub primary_key: String,
     pub payer: String,
-    pub secondary_key: f64,
+    pub secondary_key: String,
 }
 
 #[allow(non_camel_case_types)]
@@ -834,10 +835,10 @@ pub struct ContractIndexLongDoubleV0 {
     pub code: String,
     pub scope: String,
     pub table: String,
-    pub primary_key: u64,
+    pub primary_key: String,
     pub payer: String,
     // TODO: float 128
-    //  pub secondary_key: f128,
+    pub secondary_key: String,
 }
 
 #[allow(non_camel_case_types)]
