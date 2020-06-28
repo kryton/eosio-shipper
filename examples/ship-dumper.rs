@@ -10,14 +10,17 @@ extern crate log;
 
 use crate::errors::Result;
 use eosio_shipper::get_sink_stream;
-use eosio_shipper::shipper_types::{ContractRow, GetBlocksRequestV0, GetStatusRequestV0, ShipRequests, ShipResultsEx, SignedBlock, TableRowEx, TableRowTypes, ContractTable, ContractIndex64, ContractIndex128, ContractIndex256, ContractIndexDouble, ContractIndexLongDouble};
+use eosio_shipper::shipper_types::{
+    ContractIndex128, ContractIndex256, ContractIndex64, ContractIndexDouble,
+    ContractIndexLongDouble, ContractRow, ContractTable, GetBlocksRequestV0, GetStatusRequestV0,
+    ShipRequests, ShipResultsEx, SignedBlock, TableRowTypes,
+};
 use futures_channel::mpsc::unbounded;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use std::cmp::min;
 use std::env;
 use std::fs::File;
 use std::io::Write;
-
 
 mod errors {
     error_chain! {
@@ -92,7 +95,11 @@ async fn main() {
                         ShipResultsEx::Status(st) => {
                             last_block = st.chain_state_end_block;
                             last_fetched = min(current + 1 + 150, last_block);
-                            info!("Chain - {} -> {}", st.chain_id.unwrap_or(String::from("?NONE?")), last_block);
+                            info!(
+                                "Chain - {} -> {}",
+                                st.chain_id.unwrap_or(String::from("?NONE?")),
+                                last_block
+                            );
                             req_s
                                 .send(ShipRequests::get_blocks_request_v0(GetBlocksRequestV0 {
                                     start_block_num: current + 1,

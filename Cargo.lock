@@ -205,6 +205,7 @@ dependencies = [
  "lazy_static",
  "libabieos-sys",
  "log",
+ "rust-embed",
  "serde",
  "serde_json",
  "tokio",
@@ -474,15 +475,17 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libabieos-sys"
-version = "0.2.4"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00e45bbf52b6fe79167582a0b5945e3004498d23c1f9856f823040b352ab419f"
+checksum = "400824a456e5d81e67cb5f83325467288f8b2770ee17b58c7dea4510903a3474"
 dependencies = [
+ "chrono",
  "cmake",
  "error-chain",
  "lazy_static",
  "regex",
  "rust-embed",
+ "serde",
 ]
 
 [[package]]

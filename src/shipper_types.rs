@@ -1,12 +1,13 @@
 //use serde::de::{SeqAccess, Visitor};
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeTuple;
+use serde::{Deserialize, Serialize, Serializer};
 // source from work done by @lucas3fonseca and @leordev
 // plan is to move to their work once it is public
 use crate::errors::Result;
 use chrono::{DateTime, Utc};
-use libabieos_sys::ABIEOS;
+use libabieos_sys::{eosio_datetime_format, ABIEOS};
 use std::fmt;
 
 lazy_static! {
@@ -33,59 +34,6 @@ lazy_static! {
         String::from("resource_limits_config"),
 
     ] .into_iter().collect();
-}
-
-pub(crate) mod eosio_datetime_format {
-    use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-    use serde::{self, Deserialize, Deserializer, Serializer};
-
-    const FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
-
-    // The signature of a serialize_with function must follow the pattern:
-    //
-    //    fn serialize<S>(&T, S) -> Result<S::Ok, S::Error>
-    //    where
-    //        S: Serializer
-    //
-    // although it may also be generic over the input types T.
-    #[allow(dead_code)]
-    pub fn serialize<S>(date: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s = format!("{}", date.format(FORMAT));
-        serializer.serialize_str(&s)
-    }
-
-    // The signature of a deserialize_with function must follow the pattern:
-    //
-    //    fn deserialize<'de, D>(D) -> Result<T, D::Error>
-    //    where
-    //        D: Deserializer<'de>
-    //
-    // although it may also be generic over the output types T.
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s: String = String::deserialize(deserializer)?;
-        let len = s.len();
-        let slice_len = if s.contains('.') {
-            len.saturating_sub(4)
-        } else {
-            len
-        };
-
-        // match Utc.datetime_from_str(&s, FORMAT) {
-        let sliced = &s[0..slice_len];
-        match NaiveDateTime::parse_from_str(sliced, FORMAT) {
-            Err(_e) => {
-                eprintln!("DateTime Fail {} {:#?}", sliced, _e);
-                Err(serde::de::Error::custom(_e))
-            }
-            Ok(dt) => Ok(Utc.from_utc_datetime(&dt)),
-        }
-    }
 }
 
 //#[derive( Deserialize)]
@@ -117,7 +65,7 @@ impl fmt::Debug for Checksum256 {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub enum ShipRequests {
     get_status_request_v0(GetStatusRequestV0),
     get_blocks_request_v0(GetBlocksRequestV0),
@@ -125,8 +73,47 @@ pub enum ShipRequests {
     quit,
 }
 
+impl ShipRequests {
+    pub fn from_bin(shipper_abi: &ABIEOS, bin: &[u8]) -> Result<ShipRequests> {
+        let mut s: String = String::from("");
+        for b in bin {
+            let hex = format!("{:02x}", b);
+            s += hex.as_str();
+        }
+        let json = shipper_abi.hex_to_json("eosio", "request", s.as_bytes())?;
+        let sr: ShipRequests = serde_json::from_str(&json)?;
+        Ok(sr)
+    }
+}
+impl Serialize for ShipRequests {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ShipRequests::get_status_request_v0(k) => {
+                m.serialize_element("get_status_request_v0")?;
+                m.serialize_element(k)?;
+            }
+            ShipRequests::get_blocks_request_v0(k) => {
+                m.serialize_element("get_blocks_request_v0")?;
+                m.serialize_element(k)?;
+            }
+            ShipRequests::get_blocks_ack_request_v0(k) => {
+                m.serialize_element("get_blocks_ack_request_v0")?;
+                m.serialize_element(k)?;
+            }
+            ShipRequests::quit => {
+                m.serialize_element("quit")?;
+                m.serialize_element(&{})?;
+            }
+        }
+        m.end()
+    }
+}
 #[derive(Debug, Serialize, Deserialize)]
-pub struct GetStatusRequestV0;
+pub struct GetStatusRequestV0 {}
 
 impl GetStatusRequestV0 {
     pub fn to_bin(&self, shipper_abi: &ABIEOS) -> Result<Vec<u8>> {
@@ -186,10 +173,34 @@ pub struct BlockPosition {
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
+//#[serde(untagged)]
 pub enum ShipResults {
     get_status_result_v0(GetStatusResponseV0),
     get_blocks_result_v0(GetBlocksResultV0),
     get_blocks_result_v1(GetBlocksResultV1),
+}
+impl Serialize for ShipResults {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ShipResults::get_status_result_v0(k) => {
+                m.serialize_element("get_status_result_v0")?;
+                m.serialize_element(k)?;
+            }
+            ShipResults::get_blocks_result_v0(k) => {
+                m.serialize_element("get_blocks_result_v0")?;
+                m.serialize_element(k)?;
+            }
+            ShipResults::get_blocks_result_v1(k) => {
+                m.serialize_element("get_blocks_result_v1")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -286,7 +297,7 @@ impl ShipResultsEx {
                         let mut row_ex: Vec<TableRowEx> = Vec::with_capacity(td0.rows.len());
                         for row in td0.rows {
                             if ROWTYPES.contains(&name) {
-                               // println!("{}",name);
+                                // println!("{}",name);
                                 let _json =
                                     shipper_abi.hex_to_json("eosio", &name, row.data.as_bytes())?;
                                 let json = format!("{{\"{}\":{}}}", &name, _json);
@@ -295,7 +306,6 @@ impl ShipResultsEx {
                                     present: row.present,
                                     data: r,
                                 });
-
                             } else {
                                 row_ex.push(TableRowEx {
                                     present: row.present,
@@ -320,7 +330,7 @@ impl ShipResultsEx {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GetStatusResponseV0 {
     pub head: BlockPosition,
     pub last_irreversible: BlockPosition,
@@ -331,7 +341,7 @@ pub struct GetStatusResponseV0 {
     pub chain_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GetBlocksResultV0 {
     pub head: BlockPosition,
     pub last_irreversible: BlockPosition,
@@ -342,7 +352,7 @@ pub struct GetBlocksResultV0 {
     pub deltas: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GetBlocksResultV1 {
     pub head: BlockPosition,
     pub last_irreversible: BlockPosition,
@@ -369,8 +379,23 @@ pub struct GetBlocksResultV0Ex {
 pub enum Traces {
     transaction_trace_v0(TransactionTraceV0),
 }
+impl Serialize for Traces {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            Traces::transaction_trace_v0(k) => {
+                m.serialize_element("get_status_result_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionTraceV0 {
     pub id: String,
     pub status: u8,
@@ -393,8 +418,27 @@ pub enum PartialTransactionVariant {
     partial_transaction_v0(PartialTransactionV0),
     partial_transaction_v1(PartialTransactionV1),
 }
+impl Serialize for PartialTransactionVariant {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            PartialTransactionVariant::partial_transaction_v0(k) => {
+                m.serialize_element("partial_transaction_v0")?;
+                m.serialize_element(k)?;
+            }
+            PartialTransactionVariant::partial_transaction_v1(k) => {
+                m.serialize_element("partial_transaction_v1")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PartialTransactionV0 {
     #[serde(with = "eosio_datetime_format")]
     pub expiration: DateTime<Utc>,
@@ -408,7 +452,7 @@ pub struct PartialTransactionV0 {
     //    pub context_free_data: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PartialTransactionV1 {
     #[serde(with = "eosio_datetime_format")]
     pub expiration: DateTime<Utc>,
@@ -427,8 +471,27 @@ pub enum ActionTraceVariant {
     action_trace_v0(ActionTraceV0),
     action_trace_v1(ActionTraceV1),
 }
+impl Serialize for ActionTraceVariant {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ActionTraceVariant::action_trace_v0(k) => {
+                m.serialize_element("action_trace_v0")?;
+                m.serialize_element(k)?;
+            }
+            ActionTraceVariant::action_trace_v1(k) => {
+                m.serialize_element("action_trace_v1")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ActionTraceV0 {
     pub action_ordinal: u32,
     pub creator_action_ordinal: u32,
@@ -443,7 +506,7 @@ pub struct ActionTraceV0 {
     pub error_code: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ActionTraceV1 {
     pub error_code: Option<u64>,
     pub context_free: bool,
@@ -465,8 +528,23 @@ pub struct ActionTraceV1 {
 pub enum ActionReceiptVariant {
     action_receipt_v0(ActionReceiptV0),
 }
+impl Serialize for ActionReceiptVariant {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ActionReceiptVariant::action_receipt_v0(k) => {
+                m.serialize_element("action_receipt_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ActionReceiptV0 {
     pub receiver: String,
     pub act_digest: String,
@@ -477,13 +555,13 @@ pub struct ActionReceiptV0 {
     pub abi_sequence: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AccountAuthSequence {
     pub account: String,
     pub sequence: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Action {
     pub account: String,
     pub name: String,
@@ -491,13 +569,13 @@ pub struct Action {
     pub data: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AccountDelta {
     pub account: String,
     pub delta: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct PermissionLevel {
     pub actor: String,
     pub permission: String,
@@ -509,13 +587,13 @@ pub struct Extension {
     pub data: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TableDeltaV0 {
     pub name: String,
     pub rows: Vec<TableRow>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TableRow {
     pub present: bool,
     pub data: String,
@@ -526,20 +604,35 @@ pub struct TableRow {
 pub enum TableDeltas {
     table_delta_v0(TableDeltaV0),
 }
+impl Serialize for TableDeltas {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            TableDeltas::table_delta_v0(k) => {
+                m.serialize_element("table_delta_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ProducerKey {
     pub name: String,
     pub public_key: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ProducerSchedule {
     pub version: u32,
     pub producer: Vec<ProducerKey>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionHeader {
     #[serde(with = "eosio_datetime_format")]
     pub expiration: DateTime<Utc>,
@@ -550,7 +643,7 @@ pub struct TransactionHeader {
     pub delay_sec: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Transaction {
     pub header: TransactionHeader,
     pub context_free_actions: Vec<Action>,
@@ -558,21 +651,21 @@ pub struct Transaction {
     pub transaction_extensions: Vec<Extension>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionReceiptHeader {
     pub status: u8,
     pub cpu_usage_us: u32,
     pub net_usage_words: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionReceiptV0 {
     #[serde(flatten)]
     pub header: TransactionReceiptHeader,
     pub trx: TransactionVariantV0,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionReceiptV1 {
     #[serde(flatten)]
     pub header: TransactionReceiptHeader,
@@ -585,6 +678,25 @@ pub enum TransactionVariantV0 {
     transaction_id(TransactionID),
     packed_transaction_v0(PackedTransactionV0),
 }
+impl Serialize for TransactionVariantV0 {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            TransactionVariantV0::transaction_id(k) => {
+                m.serialize_element("transaction_id")?;
+                m.serialize_element(k)?;
+            }
+            TransactionVariantV0::packed_transaction_v0(k) => {
+                m.serialize_element("packed_transaction_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
@@ -592,13 +704,32 @@ pub enum TransactionVariantV1 {
     transaction_id(TransactionID),
     packed_transaction_v1(PackedTransactionV1),
 }
+impl Serialize for TransactionVariantV1 {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            TransactionVariantV1::transaction_id(k) => {
+                m.serialize_element("transaction_id")?;
+                m.serialize_element(k)?;
+            }
+            TransactionVariantV1::packed_transaction_v1(k) => {
+                m.serialize_element("packed_transaction_v1")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionID {
     pub transaction_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PackedTransactionV0 {
     pub signatures: Vec<String>,
     pub compression: u8,
@@ -606,7 +737,7 @@ pub struct PackedTransactionV0 {
     pub packed_trx: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PackedTransactionV1 {
     pub compression: u8,
     pub prunable_data: PrunableData,
@@ -621,20 +752,46 @@ pub enum PrunableData {
     prunable_data_partial(PrunableDataPartial),
     prunable_data_full(PrunableDataFull),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for PrunableData {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            PrunableData::prunable_data_full_legacy(k) => {
+                m.serialize_element("prunable_data_full_legacy")?;
+                m.serialize_element(k)?;
+            }
+            PrunableData::prunable_data_none(k) => {
+                m.serialize_element("prunable_data_none")?;
+                m.serialize_element(k)?;
+            }
+            PrunableData::prunable_data_partial(k) => {
+                m.serialize_element("prunable_data_partial")?;
+                m.serialize_element(k)?;
+            }
+            PrunableData::prunable_data_full(k) => {
+                m.serialize_element("prunable_data_full")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PrunableDataFullLegacy {
     pub signatures: Vec<String>,
     pub packed_context_segments: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PrunableDataFull {
     pub signatures: Vec<String>,
     pub context_free_segments: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PrunableDataPartial {
     pub signatures: Vec<String>,
     pub context_free_segments: Vec<ContextFreeSegmentType>,
@@ -646,8 +803,26 @@ pub enum ContextFreeSegmentType {
     signature(String),
     bytes(String),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContextFreeSegmentType {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContextFreeSegmentType::signature(k) => {
+                m.serialize_element("signature")?;
+                m.serialize_element(k)?;
+            }
+            ContextFreeSegmentType::bytes(k) => {
+                m.serialize_element("bytes")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PrunableDataNone {
     pub prunable_digest: String,
 }
@@ -658,8 +833,26 @@ pub enum SignedBlock {
     signed_block_v0(SignedBlockV0),
     signed_block_v1(SignedBlockV1),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for SignedBlock {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            SignedBlock::signed_block_v0(k) => {
+                m.serialize_element("signed_block_v0")?;
+                m.serialize_element(k)?;
+            }
+            SignedBlock::signed_block_v1(k) => {
+                m.serialize_element("signed_block_v1")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BlockHeader {
     pub timestamp: String,
     pub producer: String,
@@ -672,14 +865,14 @@ pub struct BlockHeader {
     pub header_extensions: Vec<Extension>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SignedBlockHeader {
     #[serde(flatten)]
     pub header: BlockHeader,
     pub producer_signature: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SignedBlockV0 {
     #[serde(flatten)]
     pub signed_header: SignedBlockHeader,
@@ -687,7 +880,7 @@ pub struct SignedBlockV0 {
     pub block_extensions: Vec<Extension>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SignedBlockV1 {
     #[serde(flatten)]
     pub signed_header: SignedBlockHeader,
@@ -701,6 +894,7 @@ pub struct TableDeltaEx {
     pub name: String,
     pub rows: Vec<TableRowEx>,
 }
+
 #[derive(Debug, Deserialize)]
 pub struct TableRowEx {
     pub present: bool,
@@ -730,13 +924,96 @@ pub enum TableRowTypes {
     Other(String),
 }
 
+impl Serialize for TableRowTypes {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            TableRowTypes::account(k) => {
+                m.serialize_element("account")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::account_metadata(k) => {
+                m.serialize_element("account_metadata")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::code(k) => {
+                m.serialize_element("code")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::contract_table(k) => {
+                m.serialize_element("contract_table")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::contract_row(k) => {
+                m.serialize_element("contract_row")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::contract_index64(k) => {
+                m.serialize_element("contract_index64")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::contract_index128(k) => {
+                m.serialize_element("contract_index128")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::contract_index256(k) => {
+                m.serialize_element("contract_index256")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::contract_index_double(k) => {
+                m.serialize_element("contract_index_double")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::contract_index_long_double(k) => {
+                m.serialize_element("contract_index_long_double")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::resource_limits(k) => {
+                m.serialize_element("resource_limits")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::resource_usage(k) => {
+                m.serialize_element("resource_usage")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::resource_limits_state(k) => {
+                m.serialize_element("resource_limits_state")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::resource_limits_config(k) => {
+                m.serialize_element("resource_limits_config")?;
+                m.serialize_element(k)?;
+            }
+            TableRowTypes::Other(k) => {}
+        }
+        m.end()
+    }
+}
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
 pub enum ContractTable {
     contract_table_v0(ContractTableV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContractTable {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContractTable::contract_table_v0(k) => {
+                m.serialize_element("contract_table_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContractTableV0 {
     pub code: String,
     pub scope: String,
@@ -749,8 +1026,22 @@ pub struct ContractTableV0 {
 pub enum ContractRow {
     contract_row_v0(ContractRowV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContractRow {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContractRow::contract_row_v0(k) => {
+                m.serialize_element("contract_row_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContractRowV0 {
     pub code: String,
     pub scope: String,
@@ -765,8 +1056,22 @@ pub struct ContractRowV0 {
 pub enum ContractIndex64 {
     contract_index64_v0(ContractIndex64V0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContractIndex64 {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContractIndex64::contract_index64_v0(k) => {
+                m.serialize_element("contract_index64_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContractIndex64V0 {
     pub code: String,
     pub scope: String,
@@ -781,8 +1086,22 @@ pub struct ContractIndex64V0 {
 pub enum ContractIndex128 {
     contract_index128_v0(ContractIndex128V0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContractIndex128 {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContractIndex128::contract_index128_v0(k) => {
+                m.serialize_element("contract_index128_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContractIndex128V0 {
     pub code: String,
     pub scope: String,
@@ -797,8 +1116,22 @@ pub struct ContractIndex128V0 {
 pub enum ContractIndex256 {
     contract_index256_v0(ContractIndex256V0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContractIndex256 {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContractIndex256::contract_index256_v0(k) => {
+                m.serialize_element("contract_index256_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContractIndex256V0 {
     pub code: String,
     pub scope: String,
@@ -813,8 +1146,22 @@ pub struct ContractIndex256V0 {
 pub enum ContractIndexDouble {
     contract_index_double_v0(ContractIndexDoubleV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContractIndexDouble {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContractIndexDouble::contract_index_double_v0(k) => {
+                m.serialize_element("contract_index_double_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContractIndexDoubleV0 {
     pub code: String,
     pub scope: String,
@@ -829,8 +1176,22 @@ pub struct ContractIndexDoubleV0 {
 pub enum ContractIndexLongDouble {
     contract_index_long_double_v0(ContractIndexLongDoubleV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for ContractIndexLongDouble {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ContractIndexLongDouble::contract_index_long_double_v0(k) => {
+                m.serialize_element("contract_index_long_double_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContractIndexLongDoubleV0 {
     pub code: String,
     pub scope: String,
@@ -846,8 +1207,22 @@ pub struct ContractIndexLongDoubleV0 {
 pub enum Code {
     code_v0(CodeV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for Code {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            Code::code_v0(k) => {
+                m.serialize_element("code_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CodeV0 {
     pub vm_type: u8,
     pub vm_version: u8,
@@ -860,15 +1235,29 @@ pub struct CodeV0 {
 pub enum AccountMetadata {
     account_metadata_v0(AccountMetadataV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for AccountMetadata {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            AccountMetadata::account_metadata_v0(k) => {
+                m.serialize_element("account_metadata_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CodeID {
     pub vm_type: u8,
     pub vm_version: u8,
     pub code_hash: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AccountMetadataV0 {
     pub name: String,
     pub privileged: bool,
@@ -882,8 +1271,22 @@ pub struct AccountMetadataV0 {
 pub enum Account {
     account_v0(AccountV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for Account {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            Account::account_v0(k) => {
+                m.serialize_element("account_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AccountV0 {
     pub name: String,
     #[serde(with = "eosio_datetime_format")]
@@ -896,19 +1299,50 @@ pub struct AccountV0 {
 pub enum ResourceUsage {
     resource_usage_v0(ResourceUsageV0),
 }
+impl Serialize for ResourceUsage {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ResourceUsage::resource_usage_v0(k) => {
+                m.serialize_element("resource_usage_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
 pub enum UsageAccumulator {
     usage_accumulator_v0(UsageAccumulatorV0),
 }
-
-#[derive(Debug, Deserialize)]
+impl Serialize for UsageAccumulator {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            UsageAccumulator::usage_accumulator_v0(k) => {
+                m.serialize_element("usage_accumulator_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UsageAccumulatorV0 {
     pub last_ordinal: u32,
-    pub value_ex: String, // u64
+    pub value_ex: String,
+    // u64
     pub consumed: String, // u64
 }
-#[derive(Debug, Deserialize)]
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ResourceUsageV0 {
     pub owner: String,
     pub net_usage: UsageAccumulator,
@@ -921,59 +1355,149 @@ pub struct ResourceUsageV0 {
 pub enum ResourceLimits {
     resource_limits_v0(ResourceLimitsV0),
 }
-#[derive(Debug, Deserialize)]
+impl Serialize for ResourceLimits {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ResourceLimits::resource_limits_v0(k) => {
+                m.serialize_element("resource_limits_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ResourceLimitsV0 {
     pub owner: String,
-    pub net_weight: String, //u64
-    pub cpu_weight: String, //u64
-    pub ram_bytes: String,  //u64
+    pub net_weight: String,
+    //u64
+    pub cpu_weight: String,
+    //u64
+    pub ram_bytes: String, //u64
 }
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
 pub enum ResourceLimitsState {
     resource_limits_state_v0(ResourceLimitsStateV0),
 }
-#[derive(Debug, Deserialize)]
+impl Serialize for ResourceLimitsState {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ResourceLimitsState::resource_limits_state_v0(k) => {
+                m.serialize_element("resource_limits_state_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ResourceLimitsStateV0 {
     pub average_block_net_usage: UsageAccumulator,
-    pub average_block_cpu_usage: UsageAccumulator, //u64
-    pub total_net_weight: String,                  //u64
-    pub total_cpu_weight: String,                  //u64
-    pub total_ram_bytes: String,                   //u64
-    pub virtual_net_limit: String,                 //u64
-    pub virtual_cpu_limit: String,                 //u64
+    pub average_block_cpu_usage: UsageAccumulator,
+    //u64
+    pub total_net_weight: String,
+    //u64
+    pub total_cpu_weight: String,
+    //u64
+    pub total_ram_bytes: String,
+    //u64
+    pub virtual_net_limit: String,
+    //u64
+    pub virtual_cpu_limit: String, //u64
 }
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
 pub enum ResourceLimitsConfig {
     resource_limits_config_v0(ResourceLimitsConfigV0),
+}
+impl Serialize for ResourceLimitsConfig {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ResourceLimitsConfig::resource_limits_config_v0(k) => {
+                m.serialize_element("resource_limits_config_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
 }
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
 pub enum ElasticLimitParameters {
     elastic_limit_parameters_v0(ElasticLimitParametersV0),
 }
-#[derive(Debug, Deserialize)]
+impl Serialize for ElasticLimitParameters {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ElasticLimitParameters::elastic_limit_parameters_v0(k) => {
+                m.serialize_element("elastic_limit_parameters_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ElasticLimitParametersV0 {
-    pub target: String,      //u64
-    pub max: String,         //u64
-    pub periods: u32,        //u64
-    pub max_multiplier: u32, //u64
+    pub target: String,
+    //u64
+    pub max: String,
+    //u64
+    pub periods: u32,
+    //u64
+    pub max_multiplier: u32,
+    //u64
     pub contract_rate: ResourceLimitsRatio,
     pub expand_rate: ResourceLimitsRatio,
 }
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Deserialize)]
 pub enum ResourceLimitsRatio {
     resource_limits_ratio_v0(ResourceLimitsRatioV0),
 }
-#[derive(Debug, Deserialize)]
+impl Serialize for ResourceLimitsRatio {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_tuple(2)?;
+        match self {
+            ResourceLimitsRatio::resource_limits_ratio_v0(k) => {
+                m.serialize_element("resource_limits_ratio_v0")?;
+                m.serialize_element(k)?;
+            }
+        }
+        m.end()
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ResourceLimitsRatioV0 {
-    pub numerator: String,   //u64
+    pub numerator: String,
+    //u64
     pub denominator: String, //u64
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ResourceLimitsConfigV0 {
     pub cpu_limit_parameters: ElasticLimitParameters,
     pub net_limit_parameters: ElasticLimitParameters,

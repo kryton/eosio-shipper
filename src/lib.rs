@@ -2,9 +2,9 @@ use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 //use log::*;
 //use std::io::prelude::*;
+use rust_embed::RustEmbed;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-
 use url::Url;
 // `error_chain!` can recurse deeply
 //#![recursion_limit = "1024"]
@@ -18,9 +18,11 @@ pub mod shipper_types;
 use crate::shipper_types::{ShipRequests, ShipResultsEx};
 use libabieos_sys::{AbiFiles, ABIEOS};
 
-//use serde_json::Value;
+#[derive(RustEmbed)]
+#[folder = "resources/"]
+pub struct ShipAbiFiles;
 
-const EOSIO_SYSTEM: &str = "eosio";
+pub const EOSIO_SYSTEM: &str = "eosio";
 
 pub async fn get_sink_stream(
     server_url: &str,
