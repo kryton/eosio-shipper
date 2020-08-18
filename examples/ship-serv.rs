@@ -99,7 +99,7 @@ fn gen_block(
         transactions: vec![],
         block_extensions: vec![],
     };
-    let mut gbr = GetBlocksResultV1 {
+    let gbr = GetBlocksResultV1 {
         head: BlockPosition {
             block_num,
             block_id: gen_block_id(end_block),
@@ -250,7 +250,7 @@ async fn main() {
         Err(e) => {
             eprintln!("{:#?}", e);
         }
-        Ok((listen_port, input_file)) => {
+        Ok((listen_port, _input_file)) => {
             let mut listener = TcpListener::bind(&listen_port).await.expect("Can't listen");
 
             info!("Listening on: {}", listen_port);
@@ -262,7 +262,7 @@ async fn main() {
                     .expect("connected streams should have a peer address");
                 info!("Got one {}", peer);
 
-                let r = accept_connection(peer, socket).await;
+                let _r = accept_connection(peer, socket).await;
             }
             /*
             while let Ok((stream, _)) = listener.accept().await {
