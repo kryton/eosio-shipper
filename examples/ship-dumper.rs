@@ -13,10 +13,11 @@ use eosio_shipper::shipper_types::{
     ContractIndex128, ContractIndex256, ContractIndex64, ContractIndexDouble,
     ContractIndexLongDouble, ContractRow, ContractTable, GetBlocksRequestV0, GetBlocksResultV0Ex,
     GetStatusRequestV0, ShipRequests, ShipResultsEx, SignedBlock, TableRowTypes,
-    TransactionVariantV0,
+    TransactionVariantV0, TransactionVariantV1,
 };
 use eosio_shipper::shipper_types::{TransactionReceiptV0, TransactionReceiptV1};
 use eosio_shipper::{get_sink_stream, EOSIO_SYSTEM};
+use futures_channel::mpsc;
 use futures_channel::mpsc::unbounded;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use libabieos_sys::ABIEOS;
@@ -99,7 +100,7 @@ fn handle_performance(mut file: &File, current: u32, block: &GetBlocksResultV0Ex
                             )
                             .unwrap();
                         }
-                        TransactionVariantV0::packed_transaction_v0(ptrx) => match trans {
+                        TransactionVariantV0::packed_transaction_v0(_ptrx) => match trans {
                             Some(t) => file
                                 .write_all(
                                     format!(
@@ -123,7 +124,7 @@ fn handle_performance(mut file: &File, current: u32, block: &GetBlocksResultV0Ex
                                 )
                                 .unwrap(),
                         },
-                        TransactionVariantV0::packed_transaction(ptrx) => match trans {
+                        TransactionVariantV0::packed_transaction(_ptrx) => match trans {
                             Some(t) => file
                                 .write_all(
                                     format!(
@@ -150,13 +151,69 @@ fn handle_performance(mut file: &File, current: u32, block: &GetBlocksResultV0Ex
                     }
                 }
             }
-            SignedBlock::signed_block_v1(b1) => debug!(
-                "v1 - {} {} {} {} ",
-                current,
-                b1.signed_header.header.producer,
-                b1.signed_header.header.timestamp,
-                b1.signed_header.producer_signature
-            ),
+            SignedBlock::signed_block_v1(b1) => {
+                debug!(
+                    "v1 - {} {} {} {} ",
+                    current,
+                    b1.signed_header.header.producer,
+                    b1.signed_header.header.timestamp,
+                    b1.signed_header.producer_signature
+                );
+                if b1.signed_header.header.confirmed > 0 {
+                    info!("Got One {}", current);
+                }
+                let it = b1.transactions.iter().zip(block.transactions.iter());
+                for (tr, trans) in it {
+                    let tran_desc = match trans {
+                        Some(t) => t
+                            .actions
+                            .iter()
+                            .map(|f| format!("{}:{}", f.account, f.name))
+                            .collect::<Vec<_>>()
+                            .join("|"),
+                        None => "".to_string(),
+                    };
+                    match &tr.trx {
+                        TransactionVariantV1::transaction_id(tid) => {
+                            file.write_all(
+                                format!(
+                                    "USAGE,T,{},{},{},{}\n",
+                                    current,
+                                    tid.transaction_id,
+                                    tr.header.cpu_usage_us,
+                                    tr.header.net_usage_words
+                                )
+                                .as_bytes(),
+                            )
+                            .unwrap();
+                        }
+                        TransactionVariantV1::packed_transaction_v1(_ptrx) => match trans {
+                            Some(t) => file
+                                .write_all(
+                                    format!(
+                                        "USAGE:P1,{},{},{},{},{}\n",
+                                        current,
+                                        tran_desc,
+                                        t.actions.len(),
+                                        tr.header.cpu_usage_us,
+                                        tr.header.net_usage_words
+                                    )
+                                    .as_bytes(),
+                                )
+                                .unwrap(),
+                            None => file
+                                .write_all(
+                                    format!(
+                                        "USAGE:P1,{},-None-,0,{},{}\n",
+                                        current, tr.header.cpu_usage_us, tr.header.net_usage_words
+                                    )
+                                    .as_bytes(),
+                                )
+                                .unwrap(),
+                        },
+                    }
+                }
+            }
         },
         None => debug!("empty?"),
     }
@@ -325,9 +382,7 @@ async fn main() {
                     perf_file = Some(f);
                 }
 
-                req_s
-                    .send(ShipRequests::get_status_request_v0(GetStatusRequestV0 {}))
-                    .await;
+                req_s.unbounded_send(ShipRequests::get_status_request_v0(GetStatusRequestV0 {}));
                 let mut last_block: u32 = 0;
                 let mut direction;
                 let mut current: u32;
@@ -355,6 +410,7 @@ async fn main() {
                 loop {
                     //   println!("Current= {} -> {}", current, last_fetched);
                     let sr: ShipResultsEx = res_r.next().await.unwrap();
+                    debug!("{}-{:?}", last_block, sr);
                     match sr {
                         ShipResultsEx::Status(st) => {
                             last_block = st.chain_state_end_block;
@@ -367,39 +423,44 @@ async fn main() {
                                 last_fetched = min(current + 1 + 150, last_block);
 
                                 req_s
-                                    .send(ShipRequests::get_blocks_request_v0(GetBlocksRequestV0 {
-                                        start_block_num: current + 1,
-                                        end_block_num: last_fetched,
-                                        max_messages_in_flight: 150,
-                                        have_positions: vec![],
-                                        irreversible_only: false,
-                                        fetch_block,
-                                        fetch_traces,
-                                        fetch_deltas,
-                                    }))
-                                    .await;
+                                    .unbounded_send(ShipRequests::get_blocks_request_v0(
+                                        GetBlocksRequestV0 {
+                                            start_block_num: current + 1,
+                                            end_block_num: last_fetched,
+                                            max_messages_in_flight: 150,
+                                            have_positions: vec![],
+                                            irreversible_only: false,
+                                            fetch_block,
+                                            fetch_traces,
+                                            fetch_deltas,
+                                        },
+                                    ))
+                                    .unwrap();
                             } else {
                                 direction = true;
                                 current = (st.chain_state_end_block as i64 + start_block) as u32; // start_block would be negative here
                                 last_fetched = min(current + 1 + 150, st.chain_state_end_block);
 
                                 req_s
-                                    .send(ShipRequests::get_blocks_request_v0(GetBlocksRequestV0 {
-                                        start_block_num: current,
-                                        end_block_num: last_fetched,
-                                        max_messages_in_flight: 150,
-                                        have_positions: vec![],
-                                        irreversible_only: false,
-                                        fetch_block,
-                                        fetch_traces,
-                                        fetch_deltas,
-                                    }))
-                                    .await;
+                                    .unbounded_send(ShipRequests::get_blocks_request_v0(
+                                        GetBlocksRequestV0 {
+                                            start_block_num: current,
+                                            end_block_num: last_fetched,
+                                            max_messages_in_flight: 150,
+                                            have_positions: vec![],
+                                            irreversible_only: false,
+                                            fetch_block,
+                                            fetch_traces,
+                                            fetch_deltas,
+                                        },
+                                    ))
+                                    .unwrap();
                             }
                         }
                         ShipResultsEx::BlockResult(blo) => match &blo.this_block {
                             Some(bp) => {
                                 current = bp.block_num;
+                                debug!("{}", bp.block_num);
 
                                 if !blo.traces.is_empty() {
                                     info!("\t-{} #Trace", blo.traces.len())
@@ -422,17 +483,17 @@ async fn main() {
                                     debug!("{} reached end {}", current, last_block);
 
                                     req_s
-                                        .send(ShipRequests::get_status_request_v0(
+                                        .unbounded_send(ShipRequests::get_status_request_v0(
                                             GetStatusRequestV0 {},
                                         ))
-                                        .await;
+                                        .unwrap();
                                 // delta_file.sync_data();
                                 } else {
                                     if (current + 1) >= last_fetched {
                                         last_fetched = min(current + 1 + 150, last_block);
                                         debug!("GBR-{}->{} {}", current, last_fetched, last_block);
                                         req_s
-                                            .send(ShipRequests::get_blocks_request_v0(
+                                            .unbounded_send(ShipRequests::get_blocks_request_v0(
                                                 GetBlocksRequestV0 {
                                                     start_block_num: current + 1,
                                                     end_block_num: last_fetched,
@@ -444,7 +505,7 @@ async fn main() {
                                                     fetch_deltas,
                                                 },
                                             ))
-                                            .await;
+                                            .unwrap();
                                         //   delta_file.sync_data();
                                     }
                                 }
@@ -452,10 +513,10 @@ async fn main() {
                             None => {
                                 debug!("{} {} empty", current, last_block);
                                 req_s
-                                    .send(ShipRequests::get_status_request_v0(
+                                    .unbounded_send(ShipRequests::get_status_request_v0(
                                         GetStatusRequestV0 {},
                                     ))
-                                    .await;
+                                    .unwrap();
                                 // delta_file.sync_all();
                             }
                         },

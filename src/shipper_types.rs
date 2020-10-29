@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize, Serializer};
 // plan is to move to their work once it is public
 use crate::errors::Result;
 use chrono::{DateTime, Utc};
-use libabieos_sys::{eosio_datetime_format, ABIEOS};
+use flate2::read::ZlibDecoder;
+use libabieos_sys::{eosio_datetime_format, hex_to_bin, ABIEOS};
+use log::*;
 use std::fmt;
+use std::io::prelude::*;
 
 lazy_static! {
     static ref ROWTYPES: HashSet<String> = vec![
@@ -81,6 +84,7 @@ impl ShipRequests {
             s += hex.as_str();
         }
         let json = shipper_abi.hex_to_json("eosio", "request", s.as_bytes())?;
+
         let sr: ShipRequests = serde_json::from_str(&json)?;
         Ok(sr)
     }
@@ -220,6 +224,7 @@ impl ShipResultsEx {
             s += hex.as_str();
         }
         let json = shipper_abi.hex_to_json("eosio", "result", s.as_bytes())?;
+        debug!("{}", json);
         let sr: ShipResults = serde_json::from_str(&json)?;
         match sr {
             ShipResults::get_blocks_result_v0(br) => {
@@ -770,12 +775,34 @@ pub struct PackedTransactionV0 {
 impl PackedTransactionV0 {
     fn convert_trx(&self, shipper_abi: &ABIEOS) -> Option<Transaction> {
         if self.packed_trx.len() != 0 {
-            let json = shipper_abi
-                .hex_to_json("eosio", "transaction", self.packed_trx.as_bytes())
-                .unwrap();
-            let trace_v: Transaction = serde_json::from_str(&json).unwrap();
-            //self.transaction= Some(trace_v);
-            Some(trace_v)
+            match self.compression {
+                0 => {
+                    let json = shipper_abi
+                        .hex_to_json("eosio", "transaction", self.packed_trx.as_bytes())
+                        .unwrap();
+                    let trace_v: Transaction = serde_json::from_str(&json).unwrap();
+                    //self.transaction= Some(trace_v);
+                    Some(trace_v)
+                }
+                1 => {
+                    let bin_compressed_trx = hex_to_bin(&self.packed_trx);
+                    let mut d = ZlibDecoder::new(bin_compressed_trx.as_slice());
+                    let mut buffer = Vec::new();
+                    d.read_to_end(&mut buffer).unwrap();
+                    let json = shipper_abi
+                        .bin_to_json("eosio", "transaction", &buffer)
+                        .unwrap();
+                    let trace_v: Transaction = serde_json::from_str(&json).unwrap();
+                    Some(trace_v)
+                }
+                _ => {
+                    error!(
+                        "Invalid compression level of {}. Skipped (PackedTransactionV0)",
+                        self.compression
+                    );
+                    None
+                }
+            }
         } else {
             None
         }
@@ -792,11 +819,33 @@ pub struct PackedTransactionV1 {
 impl PackedTransactionV1 {
     fn convert_trx(&self, shipper_abi: &ABIEOS) -> Option<Transaction> {
         if self.packed_trx.len() != 0 {
-            let json = shipper_abi
-                .hex_to_json("eosio", "transaction", self.packed_trx.as_bytes())
-                .unwrap();
-            let trace_v: Transaction = serde_json::from_str(&json).unwrap();
-            Some(trace_v)
+            match self.compression {
+                0 => {
+                    let json = shipper_abi
+                        .hex_to_json("eosio", "transaction", self.packed_trx.as_bytes())
+                        .unwrap();
+                    let trace_v: Transaction = serde_json::from_str(&json).unwrap();
+                    Some(trace_v)
+                }
+                1 => {
+                    let bin_compressed_trx = hex_to_bin(&self.packed_trx);
+                    let mut d = ZlibDecoder::new(bin_compressed_trx.as_slice());
+                    let mut buffer = Vec::new();
+                    d.read_to_end(&mut buffer).unwrap();
+                    let json = shipper_abi
+                        .bin_to_json("eosio", "transaction", &buffer)
+                        .unwrap();
+                    let trace_v: Transaction = serde_json::from_str(&json).unwrap();
+                    Some(trace_v)
+                }
+                _ => {
+                    error!(
+                        "Invalid compression level of {}. Skipped (PackedTransactionV1)",
+                        self.compression
+                    );
+                    None
+                }
+            }
         } else {
             None
         }

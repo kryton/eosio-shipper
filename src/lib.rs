@@ -27,7 +27,7 @@ pub const EOSIO_SYSTEM: &str = "eosio";
 pub async fn get_sink_stream(
     server_url: &str,
     mut in_tx: UnboundedReceiver<ShipRequests>,
-    mut out_rx: UnboundedSender<ShipResultsEx>,
+    out_rx: UnboundedSender<ShipResultsEx>,
 ) -> Result<()> {
     let r = connect_async(Url::parse(server_url).expect("Can't connect to server")).await?;
     let socket = r.0;
@@ -62,7 +62,7 @@ pub async fn get_sink_stream(
 
                     let r = ShipResultsEx::from_bin(&shipper_abi, &data).unwrap();
 
-                    out_rx.send(r).await.expect("Didn't send");
+                    out_rx.unbounded_send(r).expect("Didn't send");
                 }
             };
             let in_loop = async {
